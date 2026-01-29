@@ -1,0 +1,60 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String   @id @default(uuid())
+  clerkUserId  String   @unique
+  email        String   @unique
+  firstName    String?
+  lastName     String?
+  companyName  String?
+  shortAbout   String?
+  blockedTopics String[]
+  interviewLanguage String @default("English")
+  primaryCustomerType String?
+  settingsConfigured Boolean @default(false)
+  researches   Research[]
+  interviews   Interview[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Research {
+  id              String      @id @default(uuid())
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  researchName    String
+  researchAbout   String?
+  primaryGoal     String
+  audiences       String[]
+  focusAreas      String[]
+  deepDive        String?
+  competitors     String?
+  topicsToAvoid   String?
+  interviews      Interview[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
+
+model Interview {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  researchId      String?
+  research        Research? @relation(fields: [researchId], references: [id], onDelete: SetNull)
+  interviewSlug   String    @unique
+  interviewUrl    String
+  title           String
+  publicTitle     String
+  interviewLength String
+  interviewTone   String
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+

@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: custiq-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: custiq
+      POSTGRES_PASSWORD: custiq
+      POSTGRES_DB: custiq
+    ports:
+      - "5434:5432"
+    volumes:
+      - custiq_postgres:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      args:
+        DATABASE_URL: postgresql://custiq:custiq@postgres:5432/custiq?schema=public
+    container_name: custiq-api
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    env_file:
+      - .env.local
+    environment:
+      PORT: 4001
+      HOST: 0.0.0.0
+      CORS_ORIGIN: http://localhost:3000
+      DATABASE_URL: postgresql://custiq:custiq@postgres:5432/custiq?schema=public
+    ports:
+      - "4001:4001"
+
+volumes:
+  custiq_postgres:
+
