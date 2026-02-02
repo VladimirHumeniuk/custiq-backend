@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import {
   interviewLengths,
@@ -154,6 +155,33 @@ export async function interviewRoutes(app: FastifyInstance) {
     reply.send(interviews);
   });
 
+  app.get("/interviews/metrics", async (request, reply) => {
+    const clerkUserId = request.user?.userId;
+    if (!clerkUserId) {
+      reply.code(401).send({ error: "Unauthorized" });
+      return;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { clerkUserId },
+      select: { id: true },
+    });
+
+    if (!user) {
+      reply.code(404).send({ error: "User not found" });
+      return;
+    }
+
+    const [interviewsCount, sessionsCount] = await Promise.all([
+      prisma.interview.count({ where: { userId: user.id } }),
+      prisma.interviewSession.count({
+        where: { interview: { userId: user.id } },
+      }),
+    ]);
+
+    reply.send({ interviewsCount, sessionsCount });
+  });
+
   app.get<{ Params: { id: string } }>("/interviews/:id", async (request, reply) => {
     const clerkUserId = request.user?.userId;
     if (!clerkUserId) {
@@ -189,6 +217,130 @@ export async function interviewRoutes(app: FastifyInstance) {
     }
 
     reply.send(interview);
+  });
+
+  app.get<{
+    Params: { id: string };
+    Querystring: { page?: string; limit?: string; sortBy?: string; sortDir?: string };
+  }>("/interviews/:id/sessions", async (request, reply) => {
+    const clerkUserId = request.user?.userId;
+    if (!clerkUserId) {
+      reply.code(401).send({ error: "Unauthorized" });
+      return;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { clerkUserId },
+    });
+
+    if (!user) {
+      reply.code(404).send({ error: "User not found" });
+      return;
+    }
+
+    const interviewId = request.params.id?.trim();
+    if (!interviewId) {
+      reply.code(400).send({ error: "Interview id is required" });
+      return;
+    }
+
+    const interview = await prisma.interview.findFirst({
+      where: { id: interviewId, userId: user.id },
+      select: { id: true },
+    });
+
+    if (!interview) {
+      reply.code(404).send({ error: "Interview not found" });
+      return;
+    }
+
+    const page = Math.max(1, Number(request.query?.page) || 1);
+    const limit = Math.min(50, Math.max(5, Number(request.query?.limit) || 10));
+    const sortBy = (request.query?.sortBy ?? "date").toString();
+    const sortDir = (request.query?.sortDir ?? "desc").toString() === "asc" ? "asc" : "desc";
+    const sortOrder: Prisma.SortOrder = sortDir === "asc" ? "asc" : "desc";
+    const skip = (page - 1) * limit;
+
+    const baseSelect = {
+      id: true,
+      status: true,
+      mode: true,
+      participantName: true,
+      participantEmail: true,
+      startedAt: true,
+      endedAt: true,
+      completed: true,
+      createdAt: true,
+      report: {
+        select: {
+          id: true,
+          createdAt: true,
+          interviewCompleted: true,
+        },
+      },
+    } as const;
+
+    const totalCount = await prisma.interviewSession.count({
+      where: { interviewId: interviewId },
+    });
+    const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+    const safePage = Math.min(page, totalPages);
+    const safeSkip = (safePage - 1) * limit;
+
+    if (sortBy === "duration") {
+      const ids = await prisma.$queryRaw<{ id: string }[]>(Prisma.sql`
+        select "id"
+        from "InterviewSession"
+        where "interviewId" = ${interviewId}
+        order by
+          coalesce(extract(epoch from ("endedAt" - "startedAt")), 0) ${Prisma.raw(sortDir)}
+        , "startedAt" desc
+        limit ${limit} offset ${safeSkip}
+      `);
+
+      const idList = ids.map((row) => row.id);
+      if (idList.length === 0) {
+        reply.send({ data: [], page: safePage, totalPages, totalCount });
+        return;
+      }
+
+      const sessions = await prisma.interviewSession.findMany({
+        where: { id: { in: idList } },
+        select: baseSelect,
+      });
+
+      const byId = new Map(sessions.map((session) => [session.id, session]));
+      const ordered = idList.map((id) => byId.get(id)).filter(Boolean);
+
+      reply.send({ data: ordered, page: safePage, totalPages, totalCount });
+      return;
+    }
+
+    const orderBy =
+      sortBy === "type"
+        ? [{ mode: sortOrder }, { startedAt: Prisma.SortOrder.desc }]
+        : sortBy === "status"
+          ? [
+              { status: sortOrder },
+              { completed: sortOrder },
+              { startedAt: Prisma.SortOrder.desc },
+            ]
+          : [{ startedAt: sortOrder }, { createdAt: Prisma.SortOrder.desc }];
+
+    const sessions = await prisma.interviewSession.findMany({
+      where: { interviewId: interviewId },
+      select: baseSelect,
+      orderBy,
+      skip: safeSkip,
+      take: limit,
+    });
+
+    reply.send({
+      data: sessions,
+      page: safePage,
+      totalPages,
+      totalCount,
+    });
   });
 
   app.post<{ Body: InterviewPayload }>("/interviews", async (request, reply) => {

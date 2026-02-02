@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { Prisma } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { prisma } from "../db.js";
 
@@ -93,8 +94,55 @@ export async function sessionRoutes(app: FastifyInstance) {
     reply.send({ ok: true, message: "session routes loaded" });
   });
 
+  app.get<{ Querystring: { limit?: string } }>("/sessions/recent", async (request, reply) => {
+    const clerkUserId = request.user?.userId;
+    if (!clerkUserId) {
+      reply.code(401).send({ error: "Unauthorized" });
+      return;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { clerkUserId },
+      select: { id: true },
+    });
+
+    if (!user) {
+      reply.code(404).send({ error: "User not found" });
+      return;
+    }
+
+    const limit = Math.min(20, Math.max(5, Number(request.query?.limit) || 5));
+
+    const sessions = await prisma.interviewSession.findMany({
+      where: {
+        interview: { userId: user.id },
+      },
+      select: {
+        id: true,
+        status: true,
+        mode: true,
+        participantName: true,
+        participantEmail: true,
+        startedAt: true,
+        endedAt: true,
+        completed: true,
+        interview: {
+          select: {
+            id: true,
+            publicTitle: true,
+            interviewLength: true,
+          },
+        },
+      },
+      orderBy: { startedAt: "desc" },
+      take: limit,
+    });
+
+    reply.send(sessions);
+  });
+
   app.post<{
-    Body: { slug?: string; participantName?: string; mode?: string };
+    Body: { slug?: string; participantName?: string; participantEmail?: string; mode?: string };
   }>("/public/sessions", async (request, reply) => {
     const body = request.body;
     if (!body) {
@@ -103,6 +151,7 @@ export async function sessionRoutes(app: FastifyInstance) {
     }
     const slug = (body.slug ?? "").trim();
     const participantName = (body.participantName ?? "").trim();
+    const participantEmail = (body.participantEmail ?? "").trim();
     const mode = body.mode as SessionMode | undefined;
     if (!slug) {
       reply.code(400).send({ error: "slug is required" });
@@ -154,6 +203,7 @@ export async function sessionRoutes(app: FastifyInstance) {
         status: "active",
         mode,
         participantName,
+        participantEmail: participantEmail || null,
         sessionToken,
         promptVersionId: "interviewer_v1",
         personaId,
@@ -173,6 +223,7 @@ export async function sessionRoutes(app: FastifyInstance) {
       interviewLength: created.interview.interviewLength,
       mode: created.mode,
       participantName: created.participantName,
+      participantEmail: created.participantEmail,
     });
   });
 
@@ -202,6 +253,10 @@ export async function sessionRoutes(app: FastifyInstance) {
       publicTitle: session.interview.publicTitle,
       interviewLength: session.interview.interviewLength,
       participantName: session.participantName,
+      participantEmail: session.participantEmail,
+      interviewId: session.interviewId,
+      startedAt: session.startedAt,
+      endedAt: session.endedAt,
       promptVersionId: session.promptVersionId,
       personaId: session.personaId,
       globalContextSnapshot: session.globalContextSnapshot,
@@ -280,7 +335,14 @@ export async function sessionRoutes(app: FastifyInstance) {
 
   app.post<{
     Params: { id: string };
-    Body: { summary: string; keyQuotesJson: unknown; painsJson: unknown; opportunitiesJson: unknown; interviewCompleted?: boolean };
+    Body: {
+      summary: string;
+      keyQuotesJson: unknown;
+      painsJson: unknown;
+      opportunitiesJson: unknown;
+      reviewJson?: unknown;
+      interviewCompleted?: boolean;
+    };
   }>("/public/sessions/:id/report", async (request, reply) => {
     const session = await resolveSession(request, reply);
     if (!session) return;
@@ -292,6 +354,7 @@ export async function sessionRoutes(app: FastifyInstance) {
     const keyQuotesJson = body.keyQuotesJson ?? [];
     const painsJson = body.painsJson ?? [];
     const opportunitiesJson = body.opportunitiesJson ?? [];
+    const reviewJson = body.reviewJson ?? null;
     const interviewCompleted = body.interviewCompleted !== false;
 
     await prisma.interviewReport.upsert({
@@ -302,6 +365,7 @@ export async function sessionRoutes(app: FastifyInstance) {
         keyQuotesJson: keyQuotesJson as object,
         painsJson: painsJson as object,
         opportunitiesJson: opportunitiesJson as object,
+        reviewJson: reviewJson ? (reviewJson as object) : Prisma.JsonNull,
         interviewCompleted,
       },
       update: {
@@ -309,9 +373,77 @@ export async function sessionRoutes(app: FastifyInstance) {
         keyQuotesJson: keyQuotesJson as object,
         painsJson: painsJson as object,
         opportunitiesJson: opportunitiesJson as object,
+        reviewJson: reviewJson ? (reviewJson as object) : Prisma.JsonNull,
         interviewCompleted,
       },
     });
     reply.send({ ok: true });
+  });
+
+  app.get<{ Params: { id: string } }>("/interview-sessions/:id/report", async (request, reply) => {
+    const clerkUserId = request.user?.userId;
+    if (!clerkUserId) {
+      reply.code(401).send({ error: "Unauthorized" });
+      return;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { clerkUserId },
+    });
+
+    if (!user) {
+      reply.code(404).send({ error: "User not found" });
+      return;
+    }
+
+    const sessionId = request.params.id?.trim();
+    if (!sessionId) {
+      reply.code(400).send({ error: "Session id is required" });
+      return;
+    }
+
+    const session = await prisma.interviewSession.findFirst({
+      where: {
+        id: sessionId,
+        interview: { userId: user.id },
+      },
+      include: {
+        interview: {
+          select: {
+            id: true,
+            publicTitle: true,
+            interviewLength: true,
+            interviewTone: true,
+          },
+        },
+        research: {
+          select: {
+            id: true,
+            researchName: true,
+            primaryGoal: true,
+          },
+        },
+        report: true,
+        segments: {
+          orderBy: { createdAt: "asc" },
+          select: {
+            id: true,
+            role: true,
+            text: true,
+            tsStart: true,
+            tsEnd: true,
+            createdAt: true,
+            metaJson: true,
+          },
+        },
+      },
+    });
+
+    if (!session) {
+      reply.code(404).send({ error: "Session not found" });
+      return;
+    }
+
+    reply.send(session);
   });
 }

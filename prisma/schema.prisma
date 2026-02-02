@@ -74,6 +74,7 @@ model InterviewSession {
   endedAt               DateTime?
   mode                  String
   participantName       String
+  participantEmail      String?
   sessionToken          String     @unique
   promptVersionId       String     @default("interviewer_v1")
   personaId             String     @default("professional")
@@ -108,6 +109,7 @@ model InterviewReport {
   keyQuotesJson       Json
   painsJson           Json
   opportunitiesJson   Json
+  reviewJson          Json?
   interviewCompleted  Boolean  @default(true)
   createdAt           DateTime @default(now())
 }

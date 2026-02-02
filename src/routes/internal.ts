@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 
 function checkInternalSecret(
@@ -38,6 +39,12 @@ export async function internalRoutes(app: FastifyInstance) {
         },
         select: {
           id: true,
+          interviewId: true,
+          mode: true,
+          participantName: true,
+          participantEmail: true,
+          startedAt: true,
+          endedAt: true,
           segments: {
             orderBy: { createdAt: "asc" },
             select: { role: true, text: true },
@@ -76,7 +83,14 @@ export async function internalRoutes(app: FastifyInstance) {
 
   app.post<{
     Params: { id: string };
-    Body: { summary: string; keyQuotesJson: unknown; painsJson: unknown; opportunitiesJson: unknown; interviewCompleted?: boolean };
+    Body: {
+      summary: string;
+      keyQuotesJson: unknown;
+      painsJson: unknown;
+      opportunitiesJson: unknown;
+      reviewJson?: unknown;
+      interviewCompleted?: boolean;
+    };
   }>("/internal/sessions/:id/report", async (request, reply) => {
     if (!checkInternalSecret(request, reply, app.config as { INTERNAL_CRON_SECRET?: string })) {
       return;
@@ -100,6 +114,7 @@ export async function internalRoutes(app: FastifyInstance) {
         keyQuotesJson: (body.keyQuotesJson ?? []) as object,
         painsJson: (body.painsJson ?? []) as object,
         opportunitiesJson: (body.opportunitiesJson ?? []) as object,
+        reviewJson: body.reviewJson ? (body.reviewJson as object) : Prisma.JsonNull,
         interviewCompleted: body.interviewCompleted !== false,
       },
       update: {
@@ -107,6 +122,7 @@ export async function internalRoutes(app: FastifyInstance) {
         keyQuotesJson: (body.keyQuotesJson ?? []) as object,
         painsJson: (body.painsJson ?? []) as object,
         opportunitiesJson: (body.opportunitiesJson ?? []) as object,
+        reviewJson: body.reviewJson ? (body.reviewJson as object) : Prisma.JsonNull,
         interviewCompleted: body.interviewCompleted !== false,
       },
     });
