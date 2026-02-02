@@ -446,4 +446,85 @@ export async function sessionRoutes(app: FastifyInstance) {
 
     reply.send(session);
   });
+
+  app.post<{
+    Params: { id: string };
+    Body: {
+      summary: string;
+      keyQuotesJson: unknown;
+      painsJson: unknown;
+      opportunitiesJson: unknown;
+      reviewJson?: unknown;
+      interviewCompleted?: boolean;
+    };
+  }>("/interview-sessions/:id/report", async (request, reply) => {
+    const clerkUserId = request.user?.userId;
+    if (!clerkUserId) {
+      reply.code(401).send({ error: "Unauthorized" });
+      return;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { clerkUserId },
+    });
+
+    if (!user) {
+      reply.code(404).send({ error: "User not found" });
+      return;
+    }
+
+    const sessionId = request.params.id?.trim();
+    if (!sessionId) {
+      reply.code(400).send({ error: "Session id is required" });
+      return;
+    }
+
+    const session = await prisma.interviewSession.findFirst({
+      where: {
+        id: sessionId,
+        interview: { userId: user.id },
+      },
+      select: { id: true },
+    });
+
+    if (!session) {
+      reply.code(404).send({ error: "Session not found" });
+      return;
+    }
+
+    const body = request.body;
+    if (!body || typeof body.summary !== "string") {
+      reply.code(400).send({ error: "summary is required" });
+      return;
+    }
+
+    const keyQuotesJson = body.keyQuotesJson ?? [];
+    const painsJson = body.painsJson ?? [];
+    const opportunitiesJson = body.opportunitiesJson ?? [];
+    const reviewJson = body.reviewJson ?? null;
+    const interviewCompleted = body.interviewCompleted !== false;
+
+    await prisma.interviewReport.upsert({
+      where: { interviewSessionId: session.id },
+      create: {
+        interviewSessionId: session.id,
+        summary: body.summary,
+        keyQuotesJson: keyQuotesJson as object,
+        painsJson: painsJson as object,
+        opportunitiesJson: opportunitiesJson as object,
+        reviewJson: reviewJson ? (reviewJson as object) : Prisma.JsonNull,
+        interviewCompleted,
+      },
+      update: {
+        summary: body.summary,
+        keyQuotesJson: keyQuotesJson as object,
+        painsJson: painsJson as object,
+        opportunitiesJson: opportunitiesJson as object,
+        reviewJson: reviewJson ? (reviewJson as object) : Prisma.JsonNull,
+        interviewCompleted,
+      },
+    });
+
+    reply.send({ ok: true });
+  });
 }
