@@ -20,6 +20,7 @@ model User {
   settingsConfigured Boolean @default(false)
   researches   Research[]
   interviews   Interview[]
+  interviewSessions InterviewSession[]
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
@@ -37,6 +38,7 @@ model Research {
   competitors     String?
   topicsToAvoid   String?
   interviews      Interview[]
+  interviewSessions InterviewSession[]
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 }
@@ -56,5 +58,57 @@ model Interview {
   active          Boolean   @default(true)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+  sessions        InterviewSession[]
+}
+
+model InterviewSession {
+  id                    String    @id @default(uuid())
+  researchId            String
+  research              Research   @relation(fields: [researchId], references: [id], onDelete: Cascade)
+  interviewId           String
+  interview             Interview  @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  createdBy             String
+  createdByUser         User       @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+  status                String     @default("active")
+  startedAt             DateTime   @default(now())
+  endedAt               DateTime?
+  mode                  String
+  participantName       String
+  sessionToken          String     @unique
+  promptVersionId       String     @default("interviewer_v1")
+  personaId             String     @default("professional")
+  compiledPromptHash    String?
+  globalContextSnapshot Json?
+  researchContextSnapshot Json?
+  lastActivityAt        DateTime   @default(now())
+  completed             Boolean   @default(false)
+  segments              TranscriptSegment[]
+  report                InterviewReport?
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+}
+
+model TranscriptSegment {
+  id                String   @id @default(uuid())
+  interviewSessionId String
+  session            InterviewSession @relation(fields: [interviewSessionId], references: [id], onDelete: Cascade)
+  role               String
+  text               String
+  tsStart            Float?
+  tsEnd              Float?
+  metaJson           Json?
+  createdAt          DateTime @default(now())
+}
+
+model InterviewReport {
+  id                  String   @id @default(uuid())
+  interviewSessionId  String   @unique
+  session             InterviewSession @relation(fields: [interviewSessionId], references: [id], onDelete: Cascade)
+  summary             String
+  keyQuotesJson       Json
+  painsJson           Json
+  opportunitiesJson   Json
+  interviewCompleted  Boolean  @default(true)
+  createdAt           DateTime @default(now())
 }
 

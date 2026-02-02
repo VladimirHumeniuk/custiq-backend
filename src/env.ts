@@ -17,6 +17,7 @@ const schema = {
     CLERK_PUBLISHABLE_KEY: { type: "string" },
     CLERK_SECRET_KEY: { type: "string" },
     CLERK_WEBHOOK_SECRET: { type: "string" },
+    INTERNAL_CRON_SECRET: { type: "string" },
   },
 };
 

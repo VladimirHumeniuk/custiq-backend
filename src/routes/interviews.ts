@@ -84,6 +84,43 @@ const validatePayload = async (
 };
 
 export async function interviewRoutes(app: FastifyInstance) {
+  app.get<{ Params: { slug: string } }>(
+    "/public/interviews/by-slug/:slug",
+    async (request, reply) => {
+      const slug = request.params.slug?.trim();
+      if (!slug) {
+        reply.code(400).send({ error: "Slug is required" });
+        return;
+      }
+
+      const interview = await prisma.interview.findFirst({
+        where: { interviewSlug: slug, active: true },
+        include: {
+          research: {
+            select: {
+              id: true,
+              researchName: true,
+              primaryGoal: true,
+            },
+          },
+        },
+      });
+
+      if (!interview) {
+        reply.code(404).send({ error: "Interview not found or inactive" });
+        return;
+      }
+
+      reply.send({
+        id: interview.id,
+        interviewSlug: interview.interviewSlug,
+        publicTitle: interview.publicTitle,
+        interviewLength: interview.interviewLength,
+        research: interview.research,
+      });
+    },
+  );
+
   app.get("/interviews", async (request, reply) => {
     const clerkUserId = request.user?.userId;
     if (!clerkUserId) {
