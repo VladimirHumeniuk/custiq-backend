@@ -73,10 +73,36 @@ export async function internalRoutes(app: FastifyInstance) {
       if (body.endedAt !== undefined) updates.endedAt = new Date(body.endedAt);
       if (body.completed !== undefined) updates.completed = Boolean(body.completed);
 
-      await prisma.interviewSession.update({
+      const session = await prisma.interviewSession.findUnique({
         where: { id },
-        data: updates,
+        select: { id: true, completed: true, createdBy: true },
       });
+
+      if (!session) {
+        reply.code(404).send({ error: "Session not found" });
+        return;
+      }
+
+      const shouldIncrementCompleted =
+        body.completed !== undefined && Boolean(body.completed) && !session.completed;
+
+      if (shouldIncrementCompleted) {
+        await prisma.$transaction([
+          prisma.interviewSession.update({
+            where: { id },
+            data: updates,
+          }),
+          prisma.user.update({
+            where: { id: session.createdBy },
+            data: { completedSessionsCount: { increment: 1 } },
+          }),
+        ]);
+      } else {
+        await prisma.interviewSession.update({
+          where: { id },
+          data: updates,
+        });
+      }
       reply.send({ ok: true });
     },
   );

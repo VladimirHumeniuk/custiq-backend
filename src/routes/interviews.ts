@@ -122,7 +122,9 @@ export async function interviewRoutes(app: FastifyInstance) {
     },
   );
 
-  app.get("/interviews", async (request, reply) => {
+  app.get<{
+    Querystring: { page?: string; limit?: string; search?: string; sortBy?: string; sortDir?: string };
+  }>("/interviews", async (request, reply) => {
     const clerkUserId = request.user?.userId;
     if (!clerkUserId) {
       reply.code(401).send({ error: "Unauthorized" });
@@ -138,8 +140,38 @@ export async function interviewRoutes(app: FastifyInstance) {
       return;
     }
 
+    const page = Math.max(1, Number(request.query?.page) || 1);
+    const limit = Math.min(50, Math.max(5, Number(request.query?.limit) || 20));
+    const sortBy = (request.query?.sortBy ?? "updatedAt").toString();
+    const sortDir = (request.query?.sortDir ?? "desc").toString() === "asc" ? "asc" : "desc";
+    const sortOrder: Prisma.SortOrder = sortDir === "asc" ? "asc" : "desc";
+    const skip = (page - 1) * limit;
+    const search = request.query?.search?.toString().trim();
+
+    const where: Prisma.InterviewWhereInput = {
+      userId: user.id,
+      ...(search
+        ? {
+            OR: [
+              { title: { contains: search, mode: "insensitive" } },
+              { publicTitle: { contains: search, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+
+    const totalCount = await prisma.interview.count({ where });
+    const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+    const safePage = Math.min(page, totalPages);
+    const safeSkip = (safePage - 1) * limit;
+
+    const orderBy =
+      sortBy === "sessions"
+        ? [{ sessions: { _count: sortOrder } }, { updatedAt: Prisma.SortOrder.desc }]
+        : [{ updatedAt: sortOrder }, { createdAt: Prisma.SortOrder.desc }];
+
     const interviews = await prisma.interview.findMany({
-      where: { userId: user.id },
+      where,
       include: {
         research: {
           select: {
@@ -148,11 +180,27 @@ export async function interviewRoutes(app: FastifyInstance) {
             primaryGoal: true,
           },
         },
+        _count: {
+          select: { sessions: true },
+        },
       },
-      orderBy: { updatedAt: "desc" },
+      orderBy,
+      skip: safeSkip,
+      take: limit,
     });
 
-    reply.send(interviews);
+    reply.send({
+      data: interviews.map((interview) => {
+        const { _count, ...rest } = interview;
+        return {
+          ...rest,
+          sessionsCount: _count.sessions,
+        };
+      }),
+      page: safePage,
+      totalPages,
+      totalCount,
+    });
   });
 
   app.get("/interviews/metrics", async (request, reply) => {
@@ -164,7 +212,7 @@ export async function interviewRoutes(app: FastifyInstance) {
 
     const user = await prisma.user.findUnique({
       where: { clerkUserId },
-      select: { id: true },
+      select: { id: true, completedSessionsCount: true },
     });
 
     if (!user) {
@@ -172,14 +220,35 @@ export async function interviewRoutes(app: FastifyInstance) {
       return;
     }
 
-    const [interviewsCount, sessionsCount] = await Promise.all([
+    const [interviewsCount, dbCompletedCount, reports] = await Promise.all([
       prisma.interview.count({ where: { userId: user.id } }),
       prisma.interviewSession.count({
-        where: { interview: { userId: user.id } },
+        where: { interview: { userId: user.id }, completed: true },
+      }),
+      prisma.interviewReport.findMany({
+        where: { session: { interview: { userId: user.id } } },
+        select: { reviewJson: true },
       }),
     ]);
 
-    reply.send({ interviewsCount, sessionsCount });
+    let completedSessionsCount = user.completedSessionsCount ?? 0;
+    if (dbCompletedCount > completedSessionsCount) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { completedSessionsCount: dbCompletedCount },
+      });
+      completedSessionsCount = dbCompletedCount;
+    }
+
+    const insightsCount = reports.reduce((total, report) => {
+      const insights = (report.reviewJson as { insights?: unknown } | null)?.insights;
+      if (Array.isArray(insights)) {
+        return total + insights.length;
+      }
+      return total;
+    }, 0);
+
+    reply.send({ interviewsCount, sessionsCount: completedSessionsCount, insightsCount });
   });
 
   app.get<{ Params: { id: string } }>("/interviews/:id", async (request, reply) => {
@@ -221,7 +290,7 @@ export async function interviewRoutes(app: FastifyInstance) {
 
   app.get<{
     Params: { id: string };
-    Querystring: { page?: string; limit?: string; sortBy?: string; sortDir?: string };
+    Querystring: { page?: string; limit?: string; sortBy?: string; sortDir?: string; search?: string };
   }>("/interviews/:id/sessions", async (request, reply) => {
     const clerkUserId = request.user?.userId;
     if (!clerkUserId) {
@@ -260,6 +329,19 @@ export async function interviewRoutes(app: FastifyInstance) {
     const sortDir = (request.query?.sortDir ?? "desc").toString() === "asc" ? "asc" : "desc";
     const sortOrder: Prisma.SortOrder = sortDir === "asc" ? "asc" : "desc";
     const skip = (page - 1) * limit;
+    const search = request.query?.search?.toString().trim();
+
+    const where: Prisma.InterviewSessionWhereInput = {
+      interviewId: interviewId,
+      ...(search
+        ? {
+            OR: [
+              { participantName: { contains: search, mode: "insensitive" } },
+              { participantEmail: { contains: search, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
 
     const baseSelect = {
       id: true,
@@ -276,22 +358,28 @@ export async function interviewRoutes(app: FastifyInstance) {
           id: true,
           createdAt: true,
           interviewCompleted: true,
+          keyQuotesJson: true,
+          painsJson: true,
+          opportunitiesJson: true,
+          reviewJson: true,
         },
       },
     } as const;
 
-    const totalCount = await prisma.interviewSession.count({
-      where: { interviewId: interviewId },
-    });
+    const totalCount = await prisma.interviewSession.count({ where });
     const totalPages = Math.max(1, Math.ceil(totalCount / limit));
     const safePage = Math.min(page, totalPages);
     const safeSkip = (safePage - 1) * limit;
 
     if (sortBy === "duration") {
+      const searchClause = search
+        ? Prisma.sql`and ("participantName" ilike ${`%${search}%`} or "participantEmail" ilike ${`%${search}%`})`
+        : Prisma.empty;
       const ids = await prisma.$queryRaw<{ id: string }[]>(Prisma.sql`
         select "id"
         from "InterviewSession"
         where "interviewId" = ${interviewId}
+        ${searchClause}
         order by
           coalesce(extract(epoch from ("endedAt" - "startedAt")), 0) ${Prisma.raw(sortDir)}
         , "startedAt" desc
@@ -328,7 +416,7 @@ export async function interviewRoutes(app: FastifyInstance) {
           : [{ startedAt: sortOrder }, { createdAt: Prisma.SortOrder.desc }];
 
     const sessions = await prisma.interviewSession.findMany({
-      where: { interviewId: interviewId },
+      where,
       select: baseSelect,
       orderBy,
       skip: safeSkip,
@@ -341,6 +429,34 @@ export async function interviewRoutes(app: FastifyInstance) {
       totalPages,
       totalCount,
     });
+  });
+
+  app.delete<{ Params: { id: string } }>("/interviews/:id", async (request, reply) => {
+    const clerkUserId = request.user?.userId;
+    if (!clerkUserId) {
+      reply.code(401).send({ error: "Unauthorized" });
+      return;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { clerkUserId },
+    });
+
+    if (!user) {
+      reply.code(404).send({ error: "User not found" });
+      return;
+    }
+
+    const result = await prisma.interview.deleteMany({
+      where: { id: request.params.id, userId: user.id },
+    });
+
+    if (result.count === 0) {
+      reply.code(404).send({ error: "Interview not found" });
+      return;
+    }
+
+    reply.send({ ok: true });
   });
 
   app.post<{ Body: InterviewPayload }>("/interviews", async (request, reply) => {

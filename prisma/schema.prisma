@@ -18,6 +18,7 @@ model User {
   interviewLanguage String @default("English")
   primaryCustomerType String?
   settingsConfigured Boolean @default(false)
+  completedSessionsCount Int @default(0)
   researches   Research[]
   interviews   Interview[]
   interviewSessions InterviewSession[]

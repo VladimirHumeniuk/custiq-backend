@@ -326,10 +326,59 @@ export async function sessionRoutes(app: FastifyInstance) {
     if (body.completed !== undefined) updates.completed = Boolean(body.completed);
     if (body.lastActivityAt !== undefined) updates.lastActivityAt = new Date(body.lastActivityAt);
     if (body.compiledPromptHash !== undefined) updates.compiledPromptHash = String(body.compiledPromptHash);
-    await prisma.interviewSession.update({
-      where: { id: session.id },
-      data: updates,
+    const shouldIncrementCompleted =
+      body.completed !== undefined && Boolean(body.completed) && !session.completed;
+    if (shouldIncrementCompleted) {
+      await prisma.$transaction([
+        prisma.interviewSession.update({
+          where: { id: session.id },
+          data: updates,
+        }),
+        prisma.user.update({
+          where: { id: session.createdBy },
+          data: { completedSessionsCount: { increment: 1 } },
+        }),
+      ]);
+    } else {
+      await prisma.interviewSession.update({
+        where: { id: session.id },
+        data: updates,
+      });
+    }
+    reply.send({ ok: true });
+  });
+
+  app.delete<{ Params: { id: string } }>("/interview-sessions/:id", async (request, reply) => {
+    const clerkUserId = request.user?.userId;
+    if (!clerkUserId) {
+      reply.code(401).send({ error: "Unauthorized" });
+      return;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { clerkUserId },
     });
+
+    if (!user) {
+      reply.code(404).send({ error: "User not found" });
+      return;
+    }
+
+    const sessionId = request.params.id?.trim();
+    if (!sessionId) {
+      reply.code(400).send({ error: "Session id is required" });
+      return;
+    }
+
+    const result = await prisma.interviewSession.deleteMany({
+      where: { id: sessionId, interview: { userId: user.id } },
+    });
+
+    if (result.count === 0) {
+      reply.code(404).send({ error: "Session not found" });
+      return;
+    }
+
     reply.send({ ok: true });
   });
 

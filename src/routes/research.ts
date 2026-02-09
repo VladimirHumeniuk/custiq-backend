@@ -231,4 +231,32 @@ export async function researchRoutes(app: FastifyInstance) {
     reply.send(updated);
     },
   );
+
+  app.delete<{ Params: { id: string } }>("/researches/:id", async (request, reply) => {
+    const clerkUserId = request.user?.userId;
+    if (!clerkUserId) {
+      reply.code(401).send({ error: "Unauthorized" });
+      return;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { clerkUserId },
+    });
+
+    if (!user) {
+      reply.code(404).send({ error: "User not found" });
+      return;
+    }
+
+    const result = await prisma.research.deleteMany({
+      where: { id: request.params.id, userId: user.id },
+    });
+
+    if (result.count === 0) {
+      reply.code(404).send({ error: "Research not found" });
+      return;
+    }
+
+    reply.send({ ok: true });
+  });
 }
